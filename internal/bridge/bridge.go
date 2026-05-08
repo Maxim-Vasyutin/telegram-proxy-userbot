@@ -7,7 +7,6 @@ package bridge
 
 import (
 	"context"
-	"log/slog"
 	"sync"
 
 	"github.com/gotd/td/telegram/message"
@@ -61,7 +60,7 @@ func New(
 		}
 	}
 
-	return &Impl{
+	b := &Impl{
 		st:            st,
 		sender:        sender,
 		api:           api,
@@ -70,7 +69,14 @@ func New(
 		pairsByChat:   pairsByChat,
 		peerByID:      make(map[int64]tg.InputPeerClass),
 		disabledPairs: make(map[string]struct{}),
+		rCache:        &reactionsCache{items: make(map[messageKey]reactionState)},
 	}
+
+	// Start a background goroutine to evict stale reaction cache entries.
+	// Phase 10 will integrate this with the proper application lifecycle.
+	go b.runCacheCleanup()
+
+	return b
 }
 
 // Impl is the concrete implementation of Bridge.
@@ -99,6 +105,10 @@ type Impl struct {
 	// disabledPairs holds pair keys where the bot has been removed from a chat
 	// (CHAT_WRITE_FORBIDDEN). Relay is silently skipped for disabled pairs.
 	disabledPairs map[string]struct{}
+
+	// rCache stores the last-known aggregate reaction set for each source
+	// message. Used by OnReactions to compute the delta and mirror reactions.
+	rCache *reactionsCache
 }
 
 // ResolvePeers fetches access hashes for every chat that appears in the
@@ -151,8 +161,3 @@ func (b *Impl) ResolvePeers(ctx context.Context, api *tg.Client) error {
 	return nil
 }
 
-// OnReactions is a stub for Phase 8 (reaction mirroring).
-func (b *Impl) OnReactions(_ context.Context, ev ReactionsEvent) error {
-	slog.Debug("OnReactions not implemented yet", "chat_id", ev.ChatID, "message_id", ev.MessageID)
-	return nil
-}

@@ -88,10 +88,20 @@ type DeleteEvent struct {
 	MessageIDs []int64
 }
 
-// ReactionsEvent carries the data for a message-reactions update (Phase 7).
+// ReactionItem represents one reaction type present on a message.
+type ReactionItem struct {
+	// Emoji is the UTF-8 emoji string for standard reactions.
+	Emoji string
+	// Custom is true for premium custom-emoji reactions; the bridge skips them.
+	Custom bool
+}
+
+// ReactionsEvent carries the current aggregate reaction state for a message.
 type ReactionsEvent struct {
 	ChatID    int64
 	MessageID int64
+	// Reactions is the full current reaction set on the source message.
+	Reactions []ReactionItem
 }
 
 // AlbumItem is one element of a media group (album).

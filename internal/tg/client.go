@@ -272,6 +272,21 @@ func New(cfg config.AccountConfig, apiID int, apiHash string, boltPath string, b
 		})
 	})
 
+	// OnMessageReactions — relay aggregate reaction changes to mirror messages.
+	dispatcher.OnMessageReactions(func(ctx context.Context, _ tg.Entities, u *tg.UpdateMessageReactions) error {
+		client.mu.Lock()
+		curBr := client.br
+		client.mu.Unlock()
+		if curBr == nil || u.Peer == nil {
+			return nil
+		}
+		return curBr.OnReactions(ctx, bridge.ReactionsEvent{
+			ChatID:    peerID(u.Peer),
+			MessageID: int64(u.MsgID),
+			Reactions: convertReactions(u.Reactions),
+		})
+	})
+
 	// updates.Manager handles gap detection and catch_up via persisted state.
 	gaps := updates.New(updates.Config{
 		Handler: dispatcher,
@@ -710,6 +725,22 @@ func (a lazyUserAuth) SignUp(ctx context.Context) (auth.UserInfo, error) {
 	// for unregistered numbers. Surface a clear error so the operator
 	// realises the phone is not yet a Telegram account.
 	return auth.UserInfo{}, fmt.Errorf("tg: phone %s is not registered with Telegram; sign-up not supported", a.phone)
+}
+
+// convertReactions converts the aggregate reaction counts from a
+// tg.MessageReactions update into the bridge-internal []bridge.ReactionItem.
+func convertReactions(r tg.MessageReactions) []bridge.ReactionItem {
+	items := make([]bridge.ReactionItem, 0, len(r.Results))
+	for _, rc := range r.Results {
+		switch rx := rc.Reaction.(type) {
+		case *tg.ReactionEmoji:
+			items = append(items, bridge.ReactionItem{Emoji: rx.Emoticon, Custom: false})
+		case *tg.ReactionCustomEmoji:
+			_ = rx // DocumentID not needed; we mark it custom and skip relay.
+			items = append(items, bridge.ReactionItem{Emoji: "", Custom: true})
+		}
+	}
+	return items
 }
 
 // convertMedia translates a tg.MessageMediaClass into a bridge.MediaRef,

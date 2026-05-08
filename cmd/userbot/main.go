@@ -22,22 +22,20 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"golang.org/x/term"
 
-	"github.com/Maxim-Vasyutin/telegram-proxy-userbot/internal/bridge"
 	"github.com/Maxim-Vasyutin/telegram-proxy-userbot/internal/config"
+	"github.com/Maxim-Vasyutin/telegram-proxy-userbot/internal/scheduler"
 	"github.com/Maxim-Vasyutin/telegram-proxy-userbot/internal/storage"
 	"github.com/Maxim-Vasyutin/telegram-proxy-userbot/internal/tg"
 
-	"github.com/gotd/td/telegram/message"
 	tgproto "github.com/gotd/td/tg"
 )
 
 const version = "0.1.0-dev"
 
-// configPath is the default location of the YAML config file inside the container.
-// Override at runtime by setting CONFIG_PATH or using the --config flag (future).
 const defaultConfigPath = "config.yaml"
 
 func main() {
@@ -139,76 +137,51 @@ func main() {
 	defer store.Close()
 	slog.Info("storage connected", "max_conns", cfg.Postgres.MaxConns)
 
-	// Resolve API credentials. validateEnvVars already ensured these
-	// are present, but we still need to convert API_ID to int.
+	// Resolve API credentials.
 	apiID, apiHash, err := readAPICreds(cfg)
 	if err != nil {
 		slog.Error("failed to read Telegram API credentials", "error", err)
 		os.Exit(1)
 	}
 
-	// Phase 2 has no scheduler yet — connect the first account from the
-	// config and let it run until SIGTERM. Phase 9 will replace this
-	// with a real Scheduler.
-	if len(cfg.Accounts) == 0 {
-		slog.Error("no accounts configured")
-		os.Exit(1)
+	// Create one tg.Client + ClientController per account.
+	// Each account gets its own BoltDB state file derived from the base path.
+	controllers := make(map[string]scheduler.AccountController, len(cfg.Accounts))
+	for _, acc := range cfg.Accounts {
+		boltPath := boltPathForAccount(cfg.State.Path, acc.Phone)
+		client, err := tg.New(acc, apiID, apiHash, boltPath, nil)
+		if err != nil {
+			slog.Error("failed to create telegram client",
+				"error", err, "account", acc.Phone)
+			os.Exit(1)
+		}
+		controllers[acc.Phone] = scheduler.NewClientController(client, store, cfg.Pairs)
 	}
-	primary := cfg.Accounts[0]
 
-	// Create the tg client without a bridge initially. The bridge requires
-	// selfID which is only known after Connect. SetBridge wires it in safely.
-	tgClient, err := tg.New(primary, apiID, apiHash, cfg.State.Path, nil)
+	// Load timezone and convert config shifts to scheduler.Shift values.
+	tz, err := time.LoadLocation(cfg.Schedule.Timezone)
 	if err != nil {
-		slog.Error("failed to create telegram client", "error", err, "account", primary.Phone)
+		// Already validated; this should never happen.
+		slog.Error("invalid timezone", "error", err)
 		os.Exit(1)
 	}
+	shifts := configShiftsToScheduler(cfg.Schedule.Shifts)
 
-	if err := tgClient.Connect(ctx); err != nil {
-		slog.Error("failed to connect telegram", "error", err, "account", primary.Phone)
-		os.Exit(1)
+	sched := scheduler.New(shifts, controllers, tz)
+
+	slog.Info("userbot starting")
+	if err := sched.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		slog.Error("scheduler exited with error", "error", err)
 	}
-	slog.Info("telegram connected", "account", tgClient.Phone())
-
-	// Build sender and bridge now that we have a connected client and selfID.
-	sender := message.NewSender(tgClient.API())
-	br := bridge.New(store, sender, tgClient.API(), cfg.Pairs, tgClient.SelfID(), primary.Phone)
-
-	// Resolve access hashes for all pair chat IDs before relaying starts.
-	if err := br.ResolvePeers(ctx, tgClient.API()); err != nil {
-		slog.Error("failed to resolve peers", "error", err)
-		os.Exit(1)
-	}
-
-	// Wire the bridge into the dispatcher. Any update arriving after this
-	// point will be forwarded to the bridge for relay.
-	tgClient.SetBridge(br)
-
-	slog.Info("userbot running — waiting for shutdown signal")
-
-	<-ctx.Done()
-
-	slog.Info("shutdown signal received, exiting", "signal", ctx.Err())
-
-	// Disconnect with a bounded timeout — we use Background here
-	// because the root ctx is already cancelled.
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-	if err := tgClient.Disconnect(shutdownCtx); err != nil {
-		slog.Error("telegram disconnect", "error", err, "account", tgClient.Phone())
-	} else {
-		slog.Info("telegram disconnected", "account", tgClient.Phone())
-	}
+	slog.Info("userbot stopped")
 }
 
 // runAuth performs the interactive --auth flow for a single account.
-// Returns nil on success, or an error on validation/auth failure.
 func runAuth(cfg *config.Config, phone string) error {
 	if strings.TrimSpace(phone) == "" {
 		return errors.New("--auth requires --phone <number>")
 	}
 
-	// Find the account in config.
 	var account *config.AccountConfig
 	for i := range cfg.Accounts {
 		if cfg.Accounts[i].Phone == phone {
@@ -225,12 +198,12 @@ func runAuth(cfg *config.Config, phone string) error {
 		return err
 	}
 
-	tgClient, err := tg.New(*account, apiID, apiHash, cfg.State.Path, nil)
+	boltPath := boltPathForAccount(cfg.State.Path, account.Phone)
+	tgClient, err := tg.New(*account, apiID, apiHash, boltPath, nil)
 	if err != nil {
 		return fmt.Errorf("create telegram client: %w", err)
 	}
 
-	// Cancel auth on SIGINT/SIGTERM so the operator can abort cleanly.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -246,12 +219,10 @@ func runAuth(cfg *config.Config, phone string) error {
 
 	passwordPrompt := func(_ context.Context) (string, error) {
 		fmt.Fprintf(os.Stderr, "Enter the cloud (2FA) password for %s: ", phone)
-		// Read with masking if stdin is a TTY; otherwise fall back to
-		// plain input so that piping (CI / scripted runs) still works.
 		fd := int(os.Stdin.Fd())
 		if term.IsTerminal(fd) {
 			pw, err := term.ReadPassword(fd)
-			fmt.Fprintln(os.Stderr) // newline after masked input
+			fmt.Fprintln(os.Stderr)
 			if err != nil {
 				return "", fmt.Errorf("read password: %w", err)
 			}
@@ -265,16 +236,11 @@ func runAuth(cfg *config.Config, phone string) error {
 		return strings.TrimSpace(line), nil
 	}
 
-	if err := tgClient.Authorize(ctx, codePrompt, passwordPrompt); err != nil {
-		return err
-	}
-	return nil
+	return tgClient.Authorize(ctx, codePrompt, passwordPrompt)
 }
 
 // readAPICreds resolves TELEGRAM_API_ID and TELEGRAM_API_HASH from the
 // environment using the variable names declared in the config.
-// validateEnvVars has already ensured the variables are non-empty, so
-// this only validates that API_ID is a valid integer.
 func readAPICreds(cfg *config.Config) (int, string, error) {
 	apiIDEnv := cfg.Telegram.APIIDEnv
 	if apiIDEnv == "" {
@@ -295,4 +261,39 @@ func readAPICreds(cfg *config.Config) (int, string, error) {
 		return 0, "", fmt.Errorf("env %s is not a valid integer: %w", apiIDEnv, err)
 	}
 	return apiID, apiHash, nil
+}
+
+// boltPathForAccount derives a per-account BoltDB path from the base path.
+// The phone number is sanitised to digits only before being appended so
+// the resulting filename is safe on all platforms.
+func boltPathForAccount(basePath, phone string) string {
+	digits := strings.Map(func(r rune) rune {
+		if unicode.IsDigit(r) {
+			return r
+		}
+		return -1
+	}, phone)
+	base := strings.TrimSuffix(basePath, ".bolt")
+	return base + "_" + digits + ".bolt"
+}
+
+// configShiftsToScheduler converts config-level ShiftConfig (HH:MM strings)
+// to scheduler.Shift (durations from midnight).
+func configShiftsToScheduler(cfgShifts []config.ShiftConfig) []scheduler.Shift {
+	result := make([]scheduler.Shift, 0, len(cfgShifts))
+	for _, s := range cfgShifts {
+		result = append(result, scheduler.Shift{
+			AccountPhone: s.AccountPhone,
+			From:         hhmmToDuration(s.From),
+			To:           hhmmToDuration(s.To),
+		})
+	}
+	return result
+}
+
+// hhmmToDuration converts a validated "HH:MM" string to a duration from midnight.
+// The config validator guarantees the format is correct before this is called.
+func hhmmToDuration(hhmm string) time.Duration {
+	t, _ := time.Parse("15:04", hhmm)
+	return time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute
 }

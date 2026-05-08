@@ -170,6 +170,12 @@ func (p *Postgres) FindByMediaGroup(ctx context.Context, mediaGroupID string) ([
 	return mappings, nil
 }
 
+// Ping checks that the database is reachable by acquiring a connection from
+// the pool. Used by the application health-check goroutine.
+func (p *Postgres) Ping(ctx context.Context) error {
+	return p.pool.Ping(ctx)
+}
+
 // Close drains and closes the underlying connection pool.
 func (p *Postgres) Close() error {
 	p.pool.Close()

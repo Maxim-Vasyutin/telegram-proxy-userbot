@@ -12,6 +12,7 @@ import (
 	"github.com/gotd/td/tgerr"
 )
 
+
 // messageKey identifies a single message within a chat, used as cache key.
 type messageKey struct {
 	ChatID    int64
@@ -157,7 +158,8 @@ func (b *Impl) OnReactions(ctx context.Context, ev ReactionsEvent) error {
 	return nil
 }
 
-// sendReaction calls messages.sendReaction with one FLOOD_WAIT retry.
+// sendReaction calls messages.sendReaction, using withRetry for FLOOD_WAIT
+// and other transient errors.
 func (b *Impl) sendReaction(
 	ctx context.Context,
 	peer tg.InputPeerClass,
@@ -170,32 +172,14 @@ func (b *Impl) sendReaction(
 		Reaction: reactions,
 	}
 
-	_, err := b.api.MessagesSendReaction(ctx, req)
-	if err == nil {
-		return nil
-	}
-
-	if tgerr.Is(err, "REACTION_INVALID") {
-		slog.Warn("reaction: emoji not allowed in chat",
-			"msg_id", msgID)
-		return nil
-	}
-
-	// FLOOD_WAIT: sleep and retry once.
-	if d, ok := tgerr.AsFloodWait(err); ok {
-		select {
-		case <-time.After(d):
-		case <-ctx.Done():
-			return ctx.Err()
+	return withRetry(ctx, func() error {
+		_, err := b.api.MessagesSendReaction(ctx, req)
+		if tgerr.Is(err, "REACTION_INVALID") {
+			slog.Warn("reaction: emoji not allowed in chat", "msg_id", msgID)
+			return nil
 		}
-		_, err = b.api.MessagesSendReaction(ctx, req)
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-
-	return err
+		return err
+	})
 }
 
 // findReactionMirror looks up the mirror message for a given source message.

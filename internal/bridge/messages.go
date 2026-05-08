@@ -15,7 +15,6 @@ import (
 	"github.com/gotd/td/telegram/message/styling"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
-	"github.com/gotd/td/tgerr"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/Maxim-Vasyutin/telegram-proxy-userbot/internal/storage"
@@ -77,26 +76,17 @@ func (b *Impl) OnNewMessage(ctx context.Context, ev MessageEvent) error {
 		}
 	}
 
-	updates, err := b.sendMessage(ctx, targetPeer, ev, replyToID)
-	if err != nil {
-		// FLOOD_WAIT: sleep and retry once.
-		if d, ok := tgerr.AsFloodWait(err); ok {
-			slog.Warn("flood wait, retrying",
-				"pair_key", pair.Key,
-				"wait", d,
-			)
-			select {
-			case <-time.After(d):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			updates, err = b.sendMessage(ctx, targetPeer, ev, replyToID)
-		}
+	if err := b.humanizer.Wait(ctx); err != nil {
+		return err
 	}
 
-	if err != nil {
-		// CHAT_WRITE_FORBIDDEN: bot removed from target chat.
-		if tgerr.Is(err, "CHAT_WRITE_FORBIDDEN") {
+	var updates tg.UpdatesClass
+	if err := withRetry(ctx, func() error {
+		var sendErr error
+		updates, sendErr = b.sendMessage(ctx, targetPeer, ev, replyToID)
+		return sendErr
+	}); err != nil {
+		if errors.Is(err, ErrChatForbidden) {
 			slog.Error("bot removed from chat, disabling pair",
 				"pair_key", pair.Key,
 				"target_chat_id", targetChatID,
@@ -569,9 +559,17 @@ func (b *Impl) OnAlbum(ctx context.Context, ev AlbumEvent) error {
 		msgBuilder = &reqBuilder.Builder
 	}
 
-	updates, err := msgBuilder.Album(ctx, opts[0], opts[1:]...)
-	if err != nil {
-		if tgerr.Is(err, "CHAT_WRITE_FORBIDDEN") {
+	if err := b.humanizer.Wait(ctx); err != nil {
+		return err
+	}
+
+	var updates tg.UpdatesClass
+	if err := withRetry(ctx, func() error {
+		var sendErr error
+		updates, sendErr = msgBuilder.Album(ctx, opts[0], opts[1:]...)
+		return sendErr
+	}); err != nil {
+		if errors.Is(err, ErrChatForbidden) {
 			slog.Error("bot removed from chat, disabling pair",
 				"pair_key", pair.Key,
 				"target_chat_id", targetChatID,

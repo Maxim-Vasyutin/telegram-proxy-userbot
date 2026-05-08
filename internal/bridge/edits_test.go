@@ -18,7 +18,7 @@ func newEditTestImpl(st storage.Storage) *Impl {
 	pairs := []config.PairConfig{
 		{Key: "pair_a", MerchantChatID: 100, SupportChatID: 200},
 	}
-	b := New(st, nil, nil, pairs, 999 /*selfID*/, "+1234567890")
+	b := New(st, nil, nil, pairs, 999 /*selfID*/, "+1234567890", 0, 0)
 	b.peerByID[100] = &tg.InputPeerChannel{ChannelID: 1, AccessHash: 11}
 	b.peerByID[200] = &tg.InputPeerChannel{ChannelID: 2, AccessHash: 22}
 	return b

@@ -43,7 +43,8 @@ func (m *mockStorage) SaveMapping(_ context.Context, _ storage.MessageMapping) e
 func (m *mockStorage) FindByMediaGroup(_ context.Context, _ string) ([]storage.MessageMapping, error) {
 	return nil, nil
 }
-func (m *mockStorage) Close() error { return nil }
+func (m *mockStorage) Ping(_ context.Context) error { return nil }
+func (m *mockStorage) Close() error                 { return nil }
 
 // TestResolveReplyTarget_foundViaTarget verifies that when FindByTarget returns a
 // mapping, the function returns the source message ID with found=true.

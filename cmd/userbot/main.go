@@ -137,6 +137,44 @@ func main() {
 	defer store.Close()
 	slog.Info("storage connected", "max_conns", cfg.Postgres.MaxConns)
 
+	// Hard-shutdown timer: if graceful shutdown takes longer than 30 s after
+	// the signal arrives, force-exit so the process never hangs indefinitely.
+	go func() {
+		<-ctx.Done()
+		time.Sleep(30 * time.Second)
+		slog.Error("hard shutdown timeout reached, forcing exit")
+		os.Exit(1)
+	}()
+
+	// PostgreSQL health check: ping every 30 s; force-exit after 2 consecutive
+	// failures (≥ 60 s of unreachability) so the supervisor can restart.
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		consecutiveFails := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				err := store.Ping(pingCtx)
+				cancel()
+				if err != nil {
+					consecutiveFails++
+					slog.Error("storage health check failed",
+						"error", err, "consecutive_fails", consecutiveFails)
+					if consecutiveFails >= 2 {
+						slog.Error("storage unreachable for 60 s, forcing exit")
+						os.Exit(1)
+					}
+				} else {
+					consecutiveFails = 0
+				}
+			}
+		}
+	}()
+
 	// Resolve API credentials.
 	apiID, apiHash, err := readAPICreds(cfg)
 	if err != nil {
@@ -155,7 +193,11 @@ func main() {
 				"error", err, "account", acc.Phone)
 			os.Exit(1)
 		}
-		controllers[acc.Phone] = scheduler.NewClientController(client, store, cfg.Pairs)
+		controllers[acc.Phone] = scheduler.NewClientController(
+			client, store, cfg.Pairs,
+			cfg.Humanization.SendDelayMinMs,
+			cfg.Humanization.SendDelayMaxMs,
+		)
 	}
 
 	// Load timezone and convert config shifts to scheduler.Shift values.

@@ -33,6 +33,7 @@ type Bridge interface {
 // account (used to ignore messages sent by the account itself);
 // accountPhone is stored verbatim in every MessageMapping for auditing.
 // api is the raw tg.Client used for downloading and low-level API calls.
+// sendDelayMinMs / sendDelayMaxMs configure the humanizer (0/0 = disabled).
 //
 // Call ResolvePeers on the returned *Impl before relaying starts.
 func New(
@@ -42,6 +43,7 @@ func New(
 	pairs []config.PairConfig,
 	selfID int64,
 	accountPhone string,
+	sendDelayMinMs, sendDelayMaxMs int,
 ) *Impl {
 	// Build a map keyed by both sides of each pair so every lookup is O(1).
 	pairsByChat := make(map[int64]Pair, len(pairs)*2)
@@ -70,6 +72,7 @@ func New(
 		peerByID:      make(map[int64]tg.InputPeerClass),
 		disabledPairs: make(map[string]struct{}),
 		rCache:        &reactionsCache{items: make(map[messageKey]reactionState)},
+		humanizer:     NewHumanizer(sendDelayMinMs, sendDelayMaxMs),
 	}
 
 	// Start a background goroutine to evict stale reaction cache entries.
@@ -109,6 +112,10 @@ type Impl struct {
 	// rCache stores the last-known aggregate reaction set for each source
 	// message. Used by OnReactions to compute the delta and mirror reactions.
 	rCache *reactionsCache
+
+	// humanizer injects a random delay before each outgoing send to make the
+	// account behave less like a bot. nil-safe (disabled when 0/0).
+	humanizer *Humanizer
 }
 
 // ResolvePeers fetches access hashes for every chat that appears in the

@@ -15,17 +15,21 @@ import (
 // Connect also wires up the Bridge for the account so relay starts
 // immediately after connection is established.
 type ClientController struct {
-	client *tg.Client
-	store  storage.Storage
-	pairs  []config.PairConfig
+	client     *tg.Client
+	store      storage.Storage
+	pairs      []config.PairConfig
+	minDelayMs int
+	maxDelayMs int
 }
 
 // NewClientController returns a ClientController for the given tg.Client.
-func NewClientController(client *tg.Client, store storage.Storage, pairs []config.PairConfig) *ClientController {
+func NewClientController(client *tg.Client, store storage.Storage, pairs []config.PairConfig, minDelayMs, maxDelayMs int) *ClientController {
 	return &ClientController{
-		client: client,
-		store:  store,
-		pairs:  pairs,
+		client:     client,
+		store:      store,
+		pairs:      pairs,
+		minDelayMs: minDelayMs,
+		maxDelayMs: maxDelayMs,
 	}
 }
 
@@ -44,6 +48,8 @@ func (c *ClientController) Connect(ctx context.Context) error {
 		c.pairs,
 		c.client.SelfID(),
 		c.client.Phone(),
+		c.minDelayMs,
+		c.maxDelayMs,
 	)
 	if err := br.ResolvePeers(ctx, c.client.API()); err != nil {
 		// Disconnect cleanly so the caller can retry.

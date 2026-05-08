@@ -45,6 +45,9 @@ type Storage interface {
 	// Returns an empty slice (not nil) when no records are found.
 	FindByMediaGroup(ctx context.Context, mediaGroupID string) ([]MessageMapping, error)
 
+	// Ping checks the database is reachable. Used by the health-check goroutine.
+	Ping(ctx context.Context) error
+
 	// Close releases all resources held by the storage implementation,
 	// including the underlying connection pool.
 	Close() error

@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"sync"
@@ -198,7 +199,7 @@ func New(cfg config.AccountConfig, apiID int, apiHash string, boltPath string, b
 				}
 			}
 		}
-		return curBr.OnNewMessage(ctx, ev)
+		return recoverBridge("OnNewMessage", func() error { return curBr.OnNewMessage(ctx, ev) })
 	})
 
 	// OnEditMessage / OnEditChannelMessage — relay text/media edits.
@@ -217,7 +218,7 @@ func New(cfg config.AccountConfig, apiID int, apiHash string, boltPath string, b
 			Entities:  convertEntities(msg.Entities),
 			NewMedia:  convertMedia(msg.Media),
 		}
-		return curBr.OnMessageEdited(ctx, ev)
+		return recoverBridge("OnMessageEdited", func() error { return curBr.OnMessageEdited(ctx, ev) })
 	}
 
 	dispatcher.OnEditMessage(func(ctx context.Context, _ tg.Entities, u *tg.UpdateEditMessage) error {
@@ -248,9 +249,11 @@ func New(cfg config.AccountConfig, apiID int, apiHash string, boltPath string, b
 		for i, id := range u.Messages {
 			msgIDs[i] = int64(id)
 		}
-		return curBr.OnMessageDeleted(ctx, bridge.DeleteEvent{
-			ChatID:     0, // not provided by this update type
-			MessageIDs: msgIDs,
+		return recoverBridge("OnMessageDeleted", func() error {
+			return curBr.OnMessageDeleted(ctx, bridge.DeleteEvent{
+				ChatID:     0, // not provided by this update type
+				MessageIDs: msgIDs,
+			})
 		})
 	})
 
@@ -266,9 +269,11 @@ func New(cfg config.AccountConfig, apiID int, apiHash string, boltPath string, b
 		for i, id := range u.Messages {
 			msgIDs[i] = int64(id)
 		}
-		return curBr.OnMessageDeleted(ctx, bridge.DeleteEvent{
-			ChatID:     u.ChannelID,
-			MessageIDs: msgIDs,
+		return recoverBridge("OnMessageDeleted", func() error {
+			return curBr.OnMessageDeleted(ctx, bridge.DeleteEvent{
+				ChatID:     u.ChannelID,
+				MessageIDs: msgIDs,
+			})
 		})
 	})
 
@@ -280,10 +285,12 @@ func New(cfg config.AccountConfig, apiID int, apiHash string, boltPath string, b
 		if curBr == nil || u.Peer == nil {
 			return nil
 		}
-		return curBr.OnReactions(ctx, bridge.ReactionsEvent{
-			ChatID:    peerID(u.Peer),
-			MessageID: int64(u.MsgID),
-			Reactions: convertReactions(u.Reactions),
+		return recoverBridge("OnReactions", func() error {
+			return curBr.OnReactions(ctx, bridge.ReactionsEvent{
+				ChatID:    peerID(u.Peer),
+				MessageID: int64(u.MsgID),
+				Reactions: convertReactions(u.Reactions),
+			})
 		})
 	})
 
@@ -613,7 +620,7 @@ func (c *Client) flushAlbum(ctx context.Context, gid int64, br bridge.Bridge) {
 	}
 
 	ev := convertAlbumEvent(msgs, ab.chatID, ab.fromID, gid)
-	if err := br.OnAlbum(ctx, ev); err != nil {
+	if err := recoverBridge("OnAlbum", func() error { return br.OnAlbum(ctx, ev) }); err != nil {
 		slog.Error("OnAlbum failed", "grouped_id", gid, "error", err)
 	}
 }
@@ -725,6 +732,23 @@ func (a lazyUserAuth) SignUp(ctx context.Context) (auth.UserInfo, error) {
 	// for unregistered numbers. Surface a clear error so the operator
 	// realises the phone is not yet a Telegram account.
 	return auth.UserInfo{}, fmt.Errorf("tg: phone %s is not registered with Telegram; sign-up not supported", a.phone)
+}
+
+// recoverBridge calls fn and converts any panic into an error, logging the
+// stack trace. Bridge handlers run user-supplied relay logic; a panic in one
+// handler must not crash the entire update dispatch loop.
+func recoverBridge(handler string, fn func() error) (retErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("bridge handler panic recovered",
+				"handler", handler,
+				"panic", fmt.Sprintf("%v", r),
+				"stack", string(debug.Stack()),
+			)
+			retErr = fmt.Errorf("bridge: %s panicked: %v", handler, r)
+		}
+	}()
+	return fn()
 }
 
 // convertReactions converts the aggregate reaction counts from a

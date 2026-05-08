@@ -151,19 +151,7 @@ func (b *Impl) ResolvePeers(ctx context.Context, api *tg.Client) error {
 	return nil
 }
 
-// OnMessageEdited is a stub for Phase 5 (edit mirroring).
-func (b *Impl) OnMessageEdited(_ context.Context, ev EditEvent) error {
-	slog.Debug("OnMessageEdited not implemented yet", "chat_id", ev.ChatID, "message_id", ev.MessageID)
-	return nil
-}
-
-// OnMessageDeleted is a stub for Phase 5 (delete mirroring).
-func (b *Impl) OnMessageDeleted(_ context.Context, ev DeleteEvent) error {
-	slog.Debug("OnMessageDeleted not implemented yet", "chat_id", ev.ChatID)
-	return nil
-}
-
-// OnReactions is a stub for Phase 7 (reaction mirroring).
+// OnReactions is a stub for Phase 8 (reaction mirroring).
 func (b *Impl) OnReactions(_ context.Context, ev ReactionsEvent) error {
 	slog.Debug("OnReactions not implemented yet", "chat_id", ev.ChatID, "message_id", ev.MessageID)
 	return nil

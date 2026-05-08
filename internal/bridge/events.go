@@ -68,12 +68,18 @@ type MessageEvent struct {
 	Media        *MediaRef // nil for text-only messages
 }
 
-// EditEvent carries the data for a message-edited update (Phase 5).
+// EditEvent carries the data for a message-edited update.
 type EditEvent struct {
 	ChatID    int64
 	MessageID int64
-	Text      string
-	Entities  []MessageEntity
+	// FromID is the sender of the original message; used by IsRelevant to
+	// filter out edits made by the userbot itself (loop prevention).
+	FromID   int64
+	Text     string
+	Entities []MessageEntity
+	// NewMedia is set when the edit also changed the attached media.
+	// Nil means text/caption-only edit.
+	NewMedia *MediaRef
 }
 
 // DeleteEvent carries the data for a message-deleted update (Phase 5).

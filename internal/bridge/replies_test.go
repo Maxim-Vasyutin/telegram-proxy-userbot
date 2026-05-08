@@ -8,13 +8,16 @@ import (
 	"github.com/Maxim-Vasyutin/telegram-proxy-userbot/internal/storage"
 )
 
-// mockStorage is an in-test implementation of storage.Storage for unit testing
-// resolveReplyTarget without requiring a real database.
+// mockStorage is an in-test implementation of storage.Storage shared across
+// bridge unit tests (replies_test.go, edits_test.go).
 type mockStorage struct {
 	byTarget     map[[2]int64]*storage.MessageMapping
 	bySource     map[[2]int64]*storage.MessageMapping
 	targetErr    error
 	sourceErr    error
+	// findBySourceFn is an optional observer invoked inside FindBySource before
+	// the normal lookup, used in edits_test.go to verify call arguments.
+	findBySourceFn func(chatID, messageID int64)
 }
 
 func (m *mockStorage) FindByTarget(ctx context.Context, chatID, messageID int64) (*storage.MessageMapping, error) {
@@ -26,6 +29,9 @@ func (m *mockStorage) FindByTarget(ctx context.Context, chatID, messageID int64)
 }
 
 func (m *mockStorage) FindBySource(ctx context.Context, chatID, messageID int64) (*storage.MessageMapping, error) {
+	if m.findBySourceFn != nil {
+		m.findBySourceFn(chatID, messageID)
+	}
 	if m.sourceErr != nil {
 		return nil, m.sourceErr
 	}

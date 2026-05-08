@@ -201,6 +201,77 @@ func New(cfg config.AccountConfig, apiID int, apiHash string, boltPath string, b
 		return curBr.OnNewMessage(ctx, ev)
 	})
 
+	// OnEditMessage / OnEditChannelMessage — relay text/media edits.
+	editHandler := func(ctx context.Context, msg *tg.Message) error {
+		client.mu.Lock()
+		curBr := client.br
+		client.mu.Unlock()
+		if curBr == nil || msg == nil {
+			return nil
+		}
+		ev := bridge.EditEvent{
+			ChatID:    peerID(msg.PeerID),
+			MessageID: int64(msg.ID),
+			FromID:    fromPeerID(msg.FromID),
+			Text:      msg.Message,
+			Entities:  convertEntities(msg.Entities),
+			NewMedia:  convertMedia(msg.Media),
+		}
+		return curBr.OnMessageEdited(ctx, ev)
+	}
+
+	dispatcher.OnEditMessage(func(ctx context.Context, _ tg.Entities, u *tg.UpdateEditMessage) error {
+		msg, ok := u.Message.(*tg.Message)
+		if !ok {
+			return nil
+		}
+		return editHandler(ctx, msg)
+	})
+
+	dispatcher.OnEditChannelMessage(func(ctx context.Context, _ tg.Entities, u *tg.UpdateEditChannelMessage) error {
+		msg, ok := u.Message.(*tg.Message)
+		if !ok {
+			return nil
+		}
+		return editHandler(ctx, msg)
+	})
+
+	// OnDeleteMessages — private/basic-group deletes (ChatID not available).
+	dispatcher.OnDeleteMessages(func(ctx context.Context, _ tg.Entities, u *tg.UpdateDeleteMessages) error {
+		client.mu.Lock()
+		curBr := client.br
+		client.mu.Unlock()
+		if curBr == nil {
+			return nil
+		}
+		msgIDs := make([]int64, len(u.Messages))
+		for i, id := range u.Messages {
+			msgIDs[i] = int64(id)
+		}
+		return curBr.OnMessageDeleted(ctx, bridge.DeleteEvent{
+			ChatID:     0, // not provided by this update type
+			MessageIDs: msgIDs,
+		})
+	})
+
+	// OnDeleteChannelMessages — supergroup/channel deletes with ChannelID.
+	dispatcher.OnDeleteChannelMessages(func(ctx context.Context, _ tg.Entities, u *tg.UpdateDeleteChannelMessages) error {
+		client.mu.Lock()
+		curBr := client.br
+		client.mu.Unlock()
+		if curBr == nil {
+			return nil
+		}
+		msgIDs := make([]int64, len(u.Messages))
+		for i, id := range u.Messages {
+			msgIDs[i] = int64(id)
+		}
+		return curBr.OnMessageDeleted(ctx, bridge.DeleteEvent{
+			ChatID:     u.ChannelID,
+			MessageIDs: msgIDs,
+		})
+	})
+
 	// updates.Manager handles gap detection and catch_up via persisted state.
 	gaps := updates.New(updates.Config{
 		Handler: dispatcher,

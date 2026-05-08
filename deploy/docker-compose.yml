@@ -1,0 +1,40 @@
+# Base compose file: named volumes, no host dependencies.
+# This is the file used by the end customer and in production.
+#
+# Usage:
+#   docker compose -f deploy/docker-compose.yml up -d
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: userbot
+      POSTGRES_PASSWORD: userbot
+      POSTGRES_DB: userbot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U userbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  userbot:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: ../.env
+    volumes:
+      - ../config.yaml:/app/config.yaml:ro
+      - userbot_sessions:/var/lib/userbot/sessions
+      - userbot_state:/var/lib/userbot
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  userbot_sessions:
+  userbot_state:

@@ -1,0 +1,67 @@
+# config.example.yaml
+# Copy to config.yaml and fill in your values.
+# Secrets (api_id/api_hash, DSN) are read from environment variables — NOT stored here.
+# config.yaml is excluded from git (see .gitignore).
+
+telegram:
+  # Name of the environment variable containing the Telegram App ID.
+  # Get yours at https://my.telegram.org → "API development tools".
+  api_id_env: TELEGRAM_API_ID
+  # Name of the environment variable containing the Telegram App Hash.
+  api_hash_env: TELEGRAM_API_HASH
+
+# 1 or 2 userbot accounts.
+# One account → runs 24/7 with no switching.
+# Two accounts → follow the schedule defined below.
+accounts:
+  - phone: "+79001234567"
+    session_path: "/var/lib/userbot/sessions/account_+79001234567.session"
+  - phone: "+79007654321"
+    session_path: "/var/lib/userbot/sessions/account_+79007654321.session"
+
+schedule:
+  # Timezone for shift boundaries. Must be a valid tz database name.
+  timezone: "Europe/Moscow"
+  # Shifts must cover the full 24 hours without overlaps (when 2 accounts are used).
+  # Time format: HH:MM (24-hour clock).
+  shifts:
+    - account_phone: "+79001234567"
+      from: "08:00"
+      to: "20:00"
+    - account_phone: "+79007654321"
+      from: "20:00"
+      to: "08:00"
+
+# Chat pairs. Each pair maps one merchant group to one support group.
+# At least 1 pair is required. N pairs are supported.
+# chat_id values must be negative (Telegram group/channel IDs are negative).
+pairs:
+  - key: "merch_1"
+    merchant_chat_id: -1001111111111
+    support_chat_id: -1002222222222
+  - key: "merch_2"
+    merchant_chat_id: -1003333333333
+    support_chat_id: -1004444444444
+
+# Humanization: random delay before forwarding each message.
+# Uniform distribution between min and max.
+humanization:
+  send_delay_min_ms: 1000   # 1 second minimum
+  send_delay_max_ms: 4000   # 4 seconds maximum
+
+# PostgreSQL connection pool settings.
+# The DSN itself is read from the environment variable specified by dsn_env.
+postgres:
+  dsn_env: DATABASE_DSN   # Name of the env variable holding the DSN
+  max_conns: 10
+  min_conns: 2
+
+# Logging configuration.
+logging:
+  level: "info"     # debug | info | warn | error
+  format: "json"    # json | text
+
+# Path to the BoltDB file used by gotd for storing the updates state (pts/qts/seq).
+# This file must survive container restarts — map it to a persistent volume.
+state:
+  path: "/var/lib/userbot/state.bolt"

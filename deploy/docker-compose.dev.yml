@@ -1,0 +1,20 @@
+# Dev overlay: replaces userbot volumes with bind mounts from ${SECRETS_DIR}.
+# PostgreSQL is NOT overridden — DB data stays on a local named volume per machine.
+#
+# Usage:
+#   export SECRETS_DIR=$HOME/Syncthing/secrets/telegram-proxy-userbot
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml up -d
+#
+# Required directory layout under ${SECRETS_DIR}:
+#   .env
+#   config.yaml
+#   sessions/    (gotd .session files)
+#   state/       (BoltDB updates state)
+
+services:
+  userbot:
+    env_file: ${SECRETS_DIR}/.env
+    volumes:
+      - ${SECRETS_DIR}/config.yaml:/app/config.yaml:ro
+      - ${SECRETS_DIR}/sessions:/var/lib/userbot/sessions
+      - ${SECRETS_DIR}/state:/var/lib/userbot

@@ -1,0 +1,44 @@
+# AI artifacts — never in git
+CLAUDE.md
+.claude/
+SPEC.md
+IMPLEMENTATION_PLAN.md
+PROMPTS.md
+DELIVERY_ROADMAP.md
+PROJECT_IDEA.md
+subagent-architecture-guide.md
+local/
+.ai/
+
+# Secrets and sessions — never commit
+.env
+*.session
+*.bolt
+
+# Local config with real chat_ids
+config.yaml
+config.local.yaml
+
+# Build artifacts
+bin/
+/userbot
+*.test
+*.out
+
+# Go
+vendor/
+
+# Docker
+docker-compose.override.yml
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
